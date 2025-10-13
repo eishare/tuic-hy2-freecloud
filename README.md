@@ -5,5 +5,5 @@
 * 必须在一键脚本末尾添加自定义端口
 
 ```
-curl -Ls https://raw.githubusercontent.com/eishare/node.js-python/main/tuic.sh | sed 's/\r$//' | bash -s -- 
+curl -Ls https://raw.githubusercontent.com/eishare/tuic-hy2-freecloud/main/tuic.sh | sed 's/\r$//' | bash -s -- 
 ```
