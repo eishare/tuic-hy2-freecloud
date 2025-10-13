@@ -8,6 +8,8 @@
 curl -Ls https://raw.githubusercontent.com/eishare/tuic-hy2-freecloud/main/tuic.sh | sed 's/\r$//' | bash -s -- 
 ```
 
+---------------------------------------
+
 # 2.Hy2在Freecloud部署
 
 * Freecloud/Natfreecloud/Runfreecloud一键极简部署TUIC节点
