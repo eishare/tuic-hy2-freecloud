@@ -9,7 +9,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-TUIC_VERSION="1.5.2"
+TUIC_VERSION="1.3.5"
 WORK_DIR="/root/tuic"
 BIN_PATH="$WORK_DIR/tuic-server"
 CONF_PATH="$WORK_DIR/server.toml"
@@ -219,3 +219,4 @@ if pgrep -f tuic-server >/dev/null; then
 else
     echo "⚠️ TUIC 未运行，请检查日志: tail -f $LOG_FILE"
 fi
+
