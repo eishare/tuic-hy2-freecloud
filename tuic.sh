@@ -1,6 +1,6 @@
 #!/bin/bash
 # =========================================
-# 🌀 TUIC v5 自动部署脚本 (挂载 /root/tuic)
+# 🌀 TUIC v5 自动部署脚本 (自动端口 + 自动镜像)
 # 兼容: Alpine / Debian / Ubuntu / Claw Cloud
 # 支持: 环境变量 uuid (固定节点)
 # by eishare / 2025-10
@@ -34,9 +34,6 @@ if [[ "${1:-}" == "uninstall" ]]; then
     exit 0
 fi
 
-# ------------------ 端口参数 ------------------
-PORT="${1:-443}"
-
 # ------------------ 检查系统 ------------------
 echo "🔍 检查系统信息..."
 ARCH=$(uname -m)
@@ -62,136 +59,37 @@ echo "🔧 检查并安装依赖..."
 eval "$PKG_INSTALL" >/dev/null 2>&1
 echo "✅ 依赖安装完成"
 
+# ------------------ 自动选择端口 ------------------
+echo "🎯 自动选择可用端口..."
+for p in $(seq 30000 65000 | shuf); do
+    if ! ss -tuln | grep -q ":$p "; then
+        PORT="$p"
+        break
+    fi
+done
+echo "✅ 已自动分配端口: $PORT"
+
 # ------------------ 创建目录 ------------------
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
 # ------------------ 下载 TUIC ------------------
-URL="https://github.com/Itsusinn/tuic/releases/download/v${TUIC_VERSION}/tuic-server-${ARCH}${C_LIB_SUFFIX}"
-echo "⬇️ 下载 TUIC: $URL"
-if curl -L -f -o "$BIN_PATH" "$URL"; then
-    chmod +x "$BIN_PATH"
-    echo "✅ TUIC 下载完成"
+BASE_URL="https://github.com/Itsusinn/tuic/releases/download/v${TUIC_VERSION}/tuic-server-${ARCH}${C_LIB_SUFFIX}"
+PROXY_URL="https://mirror.ghproxy.com/${BASE_URL}"
+
+echo "⬇️ 尝试下载 TUIC: $BASE_URL"
+if curl -L -f -o "$BIN_PATH" "$BASE_URL"; then
+    echo "✅ 从 GitHub 下载成功"
 else
-    echo "❌ 下载失败，请检查网络"
-    exit 1
+    echo "⚠️ GitHub 下载失败，切换到镜像源..."
+    if curl -L -f -o "$BIN_PATH" "$PROXY_URL"; then
+        echo "✅ 从 ghproxy 镜像下载成功"
+    else
+        echo "❌ 所有源下载失败，请检查网络"
+        exit 1
+    fi
 fi
+chmod +x "$BIN_PATH"
 
 # ------------------ 生成证书 ------------------
-if [[ ! -f "$CERT_PEM" ]]; then
-    echo "🔐 生成自签证书..."
-    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout "$KEY_PEM" -out "$CERT_PEM" -subj "/CN=${MASQ_DOMAIN}" -days 365 -nodes >/dev/null 2>&1
-    echo "✅ 证书生成完成"
-fi
-
-# ------------------ UUID 设置 ------------------
-if [[ -n "${uuid:-}" ]]; then
-    UUID="$uuid"
-    echo "🔗 使用爪云环境变量 uuid: $UUID"
-else
-    UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
-    echo "⚙️ 未检测到环境变量 uuid，已自动生成: $UUID"
-fi
-PASS=$(openssl rand -hex 16)
-
-# ------------------ 生成配置 ------------------
-cat > "$CONF_PATH" <<EOF
-log_level = "info"
-server = "0.0.0.0:${PORT}"
-udp_relay_ipv6 = false
-zero_rtt_handshake = true
-dual_stack = false
-auth_timeout = "10s"
-task_negotiation_timeout = "5s"
-gc_interval = "10s"
-gc_lifetime = "10s"
-max_external_packet_size = 8192
-
-[users]
-${UUID} = "${PASS}"
-
-[tls]
-certificate = "$CERT_PEM"
-private_key = "$KEY_PEM"
-alpn = ["h3"]
-
-[quic]
-initial_mtu = 1500
-min_mtu = 1200
-gso = true
-pmtu = true
-send_window = 33554432
-receive_window = 16777216
-max_idle_time = "20s"
-congestion_control = { controller = "bbr", initial_window = 4194304 }
-EOF
-
-echo "✅ 配置文件生成完成: $CONF_PATH"
-
-# ------------------ TUIC 链接 ------------------
-IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "YOUR_IP")
-LINK="tuic://${UUID}:${PASS}@${IP}:${PORT}?congestion_control=bbr&alpn=h3&allowInsecure=1&sni=${MASQ_DOMAIN}&udp_relay_mode=native&disable_sni=0&reduce_rtt=1#TUIC-${IP}"
-echo "$LINK" > "$LINK_PATH"
-echo "📱 TUIC 链接: $LINK"
-echo "🔗 已保存至: $LINK_PATH"
-
-# ------------------ 启动脚本 ------------------
-cat > "$START_SH" <<EOF
-#!/bin/bash
-cd $WORK_DIR
-while true; do
-  "$BIN_PATH" -c "$CONF_PATH" >> "$LOG_FILE" 2>&1
-  echo "⚠️ TUIC 已退出，5秒后自动重启..." >> "$LOG_FILE"
-  sleep 5
-done
-EOF
-chmod +x "$START_SH"
-
-# ------------------ 守护进程 ------------------
-if command -v systemctl >/dev/null 2>&1; then
-    cat > /etc/systemd/system/tuic-server.service <<EOF
-[Unit]
-Description=TUIC Server
-After=network.target
-
-[Service]
-ExecStart=$BIN_PATH -c $CONF_PATH
-Restart=always
-RestartSec=5
-WorkingDirectory=$WORK_DIR
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload
-    systemctl enable tuic-server
-    systemctl restart tuic-server
-    echo "🧩 已创建 systemd 服务 tuic-server"
-else
-    nohup bash "$START_SH" >/dev/null 2>&1 &
-    echo "🌀 使用 nohup 守护 TUIC 进程"
-fi
-
-# ------------------ 防火墙 ------------------
-if command -v ufw >/dev/null 2>&1; then
-    ufw allow "$PORT"/tcp >/dev/null 2>&1 || true
-    ufw allow "$PORT"/udp >/dev/null 2>&1 || true
-elif command -v iptables >/dev/null 2>&1; then
-    iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT || true
-    iptables -I INPUT -p udp --dport "$PORT" -j ACCEPT || true
-fi
-echo "🧱 已放行 TCP/UDP 端口: $PORT"
-
-# ------------------ 检查运行状态 ------------------
-sleep 2
-echo ""
-echo "✅ TUIC 部署完成！"
-echo "📄 配置文件: $CONF_PATH"
-echo "🔗 节点链接: $LINK_PATH"
-echo "📜 日志路径: $LOG_FILE"
-if pgrep -f tuic-server >/dev/null; then
-    echo "✅ TUIC 正在运行"
-else
-    echo "⚠️ TUIC 未运行，请检查日志: tail -f $LOG_FILE"
-fi
+if [[ ! -f]()]()
