@@ -27,14 +27,27 @@ if ! command -v openssl >/dev/null 2>&1; then
   apk add --no-cache openssl >/dev/null
 fi
 
+ARCH=$(uname -m)
+echo "🧩 检测到系统架构: $ARCH"
+
 # =================== 下载 TUIC 可执行文件 ===================
-echo "📥 下载 TUIC 全静态 musl 版..."
-TUIC_URL="https://github.com/InvisibleFutureLab/tuic-prebuilt/releases/download/fully-static/tuic-server-musl-x86_64"
+BASE_URL="https://github.com/InvisibleFutureLab/tuic-prebuilt/releases/download/fully-static"
+if [ "$ARCH" = "x86_64" ]; then
+  TUIC_URL="$BASE_URL/tuic-server-musl-x86_64"
+elif [ "$ARCH" = "aarch64" ]; then
+  TUIC_URL="$BASE_URL/tuic-server-musl-aarch64"
+else
+  echo "❌ 不支持的架构: $ARCH"
+  exit 1
+fi
+
+echo "📥 下载 TUIC 全静态版本 ($ARCH)..."
 curl -L -o "$BIN" "$TUIC_URL"
 chmod +x "$BIN"
 
 if ! "$BIN" -v >/dev/null 2>&1; then
-  echo "❌ tuic-server 无法运行，请确认系统架构为 x86_64 Alpine"
+  echo "❌ tuic-server 无法执行，请确认系统兼容 musl"
+  file "$BIN"
   exit 1
 fi
 
